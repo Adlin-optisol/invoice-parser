@@ -509,8 +509,6 @@ def main():
                     # Process the file
                     result = process_pdf(uploaded_file)
                     
-                    with st.expander("View raw markdown"):
-                        st.code(result, language="markdown")
                     # Create a container for the rendered markdown
                     table_container = st.container()
                     with table_container:
