@@ -7,6 +7,7 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from dotenv import load_dotenv
 from elsai_core.model import AzureOpenAIConnector
 from elsai_core.config.loggerConfig import setup_logger
+from invoice_prompts import get_prompt_by_type  # Import the prompt function
 
 # Set up logging
 
@@ -45,8 +46,8 @@ def extract_content_from_pdf(pdf_path):
     
     try:
         # Get Azure credentials from environment variables
-        endpoint = st.secrets["VISION_ENDPOINT"]
-        key = st.secrets["VISION_KEY"]
+        endpoint = os.getenv("VISION_ENDPOINT")
+        key = os.getenv("VISION_KEY")
         
         if not endpoint or not key:
             logger.error("Azure Document Intelligence credentials not found in environment variables")
@@ -135,6 +136,7 @@ def extract_text(result):
     
     logger.debug(f"Text extraction complete. Extracted text from {len(text_content)} pages")
     return text_content
+
 def extract_tables(result):
     """
     Extract tables from the analysis result.
@@ -266,18 +268,19 @@ def convert_to_markdown(text_content, tables):
     logger.debug("Markdown conversion complete")
     return "".join(markdown_parts)
 
-def process_pdf(uploaded_file):
+def process_pdf(uploaded_file, document_type):
     """
     Process an uploaded PDF file.
     
     Args:
         uploaded_file: The uploaded file object from Streamlit
+        document_type: The type of document ('invoice', 'timesheet', or 'both')
         
     Returns:
         str: Markdown formatted results
     """
     file_name = uploaded_file.name
-    logger.info(f"Processing PDF file: {file_name}")
+    logger.info(f"Processing PDF file: {file_name} as {document_type}")
     
     # Create a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -301,172 +304,9 @@ def process_pdf(uploaded_file):
         llm = connector.connect_azure_open_ai(deploymentname="gpt-4o-mini")
         logger.info("LLM connector initialized")
         
-        logger.info("Generating prompt for LLM processing")
-        prompt = f"""### Unified Prompt for Invoice and Timesheet Data Extraction
-        #### **Identify Document Type**
-        - Analyze the content to determine if the document is an **Invoice**, a **Timesheet**, or both.
-        - IF ITS ONLY A TIMESHEET ONLY INCLUDE TIMESHEETS'S DEFINED PARAMETERS(SET1 OR SET 2) IN THE FINAL OUTPUT
-        - IF ITS ONLY AN INVOICE ONLY INCLUDE INVOICE'S  DEFINED PARAMETERS IN THE FINAL OUTPUT
-        - MAP THE VALUES TO THE DEFINED PARAMTERS AS PER THE DOCUMENT TYPE (INVOICE OR TIMESHEET)
-        - IGNORE IF VALUES CANT BE MAPPED TO THE DEFINED PARAMETERS , DONT INCLUDE 
-        - Extract relevant fields based on the identified document type.
-        - Choose the most suitable timesheet data extraction set with the most complete or accurate information.
-        - The content is as follows:
-        {markdown_content}
-        ---
-
-        ### **Invoice Data Extraction** (include as title )
-
-        #### **Extract Invoice Header Information**
-        - Invoice Number
-        - Invoice Date
-        - Invoice Terms
-        - Due Date
-        - Page Number
-
-        #### **Extract Company Details**
-        - Company Name
-        - Company Address
-        - Company Phone Number	
-        - Company Mobile Number
-        - Company Email
-
-        #### **Extract Client Details**
-        - Client Name
-        - Client Address
-
-        #### **Extract Invoice Line Items** (this may have mutltiple records .the following are the headers of the table and the multiple records should be as rows in the table)
-        - Job Order No
-        - Purchase Order No
-        - Payee Name
-        - Weekending Date
-        - Description
-        - Item
-        - Quantity
-        - Rate
-        - Invoice Amount (ex. Tax)
-
-        #### **Extract Bank Details**
-        - Bank Name
-        - BSB (Bank-State-Branch)
-        - Account Number
-
-        #### **Extract Invoice Totals**
-        - Sub Total
-        - GST
-        - Total Amount
-
-        ---
-
-        ### **Timesheet Data Extraction** (include as title )
-
-        - Choose **Set 1** or **Set 2** for timesheet data extraction based on the amount of information or accuracy.
-        - Donot mention if its**Set 1** or **Set 2** in the final json 
-
-        #### **Set 1: Extract Timesheet Header Information**
-        - Payee No
-        - Payee Name
-        - Job Order
-        - Job Description
-        - Client Number 
-        - Client Name
-        - Weekending Date
-
-        #### **Extract Timesheet Attendance Details**
-        - Date
-        - Start Time
-        - End Time
-        - Attendance/Absence Type
-        - Total Hours
-
-        #### **Extract Additional Items**
-        - Date
-        - Item Description
-        - Quantity
-
-        #### **Extract Reimbursement Comments**
-        - Comment Date
-        - Created Date & Time
-        - Created By
-        - Comment
-        - Display to Candidate (Yes/No)
-        - Display to Client Contact (Yes/No)
-
-        #### **Extract Timesheet Totals**
-        - Total Scheduled Hours
-        - Total Attendance Hours
-        - Total Absence Hours
-
-        ---
-
-        #### **Set 2: Employee Details** (if the timesheet follows this format,give each #### as a different table in the markdown)
-        - Employee Name
-        - Employee Code (is not Crane logistics or EWP )
-        - Type( Crane logistics or EWP )
-        - Depot 
-        - Date
-
-        #### **Allowances (KM's Section)**
-        - KM's Allowance 1 (with checkbox and description)
-        - KM's Allowance 2 (with checkbox and description)
-
-        #### **Location Details**
-        - Starting Location
-        - End Location
-
-        #### **Compliance Checks**
-        - 10-Hour Break Since Last Shift (YES/NO)
-        - Lunch Break Taken (YES/NO)
-        - Next Shift 10-Hour Break Compliance (YES/NO)
-        - Incident/Injury Occurred (YES/NO, requires incident report if YES)
-
-        #### **Shift Details Table** ("Description" has multiple records .the following are the headers of the table and the multiple records should be as rows in the table. BE SURE TO EXTRACT IT ALL)
-        - Start Time
-        - Finish Time
-        - Meal  Break(consider this field as a checkbox)
-        - Total Hours
-        - Crane Operator(consider this field as a checkbox)
-        - Rigger/Dogman(consider this field as a checkbox)
-        - Truck Driver(consider this field as a checkbox)
-        - Travel Tower Operator(consider this field as a checkbox)
-        - Mechanic(consider this field as a checkbox)
-        - Other(consider this field as a checkbox)
-        - Asset Number
-        - Hire Docket/Work Order Number
-        - Customer Name
-        - Description 
-        - Job Code
-        - Job Complete (Y/N)
-
-        #### **Approval Section (for No Lunch Break)**
-        - Authorised By (name)
-
-        #### **Document Metadata**
-        - Document Number (e.g., NAT-FM-PR-0109)
-        - Issue Date (e.g., 30/09/14)
-
-        ---
-
-        ### **General Instructions**
-
-        #### **Handle Multi-Page Documents**
-        - Ensure data is extracted from all pages, including headers, tables, and footers.
-
-        #### **Validate Extracted Data**
-        - Perform cross-checks for consistency and completeness.
-        - Ignore missing or inconsistent fields.
-
-        #### **Handle Checkboxes and Free-Text Fields**
-        - For checkbox fields (e.g., YES/NO), extract the selected option. 
-        - For free-text fields (e.g., allowances, descriptions), extract the text as-is. If empty, ignore it.
-
-        #### **Output Structured Data**
-        - Present the extracted information as a clear, well-structured table with appropriate field labels in markdown format .
-        - Choose the correct set (Set 1 or Set 2) for timesheet extraction. Only one set should be included in the final table.
-        - even in that set if feild are missing dont include ..give only the available fields in the table no empty cells 
-        - Donot include missing fields ,empty key-value pairs . just give table no need to give summary .
-        - IMPORTANT: Use valid markdown table format. Ensure the table has header rows, separator rows, and proper cell alignment. Do not include any explanatory text before or after the table
-        """
+        # Get appropriate prompt based on document type
+        logger.info(f"Getting prompt for document type: {document_type}")
+        prompt = get_prompt_by_type(document_type, markdown_content)
         
         logger.info("Sending request to LLM")
         response = llm.invoke(prompt)
@@ -494,6 +334,14 @@ def main():
                                      type=['pdf'], 
                                      accept_multiple_files=True)
     
+    # Document type selection dropdown
+    document_type = st.selectbox(
+        "Select document type",
+        options=["Invoice", "Timesheet", "Digital Invoice and Timesheet", "Multiple Timesheets"],
+        help="Select the type of document you are uploading"
+    )
+    logger.info(f"Document type selected: {document_type}")
+    
     if uploaded_files:
         logger.info(f"{len(uploaded_files)} files uploaded")
         
@@ -506,8 +354,8 @@ def main():
                     logger.info(f"Processing file: {uploaded_file.name}")
                     st.subheader(f"Processing: {uploaded_file.name}")
                     
-                    # Process the file
-                    result = process_pdf(uploaded_file)
+                    # Process the file with the selected document type
+                    result = process_pdf(uploaded_file, document_type)
                     
                     # Create a container for the rendered markdown
                     table_container = st.container()
