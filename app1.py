@@ -355,7 +355,7 @@ def main():
                     st.subheader(f"Processing: {uploaded_file.name}")
                     
                     # Process the file with the selected document type
-                    result = process_pdf(uploaded_file, document_type)
+                    result = process_pdf(uploaded_file, document_type).replace("```markdown","").replace("```","")
                     
                     # Create a container for the rendered markdown
                     table_container = st.container()
